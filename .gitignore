@@ -1,6 +1,7 @@
 data/
 *.pth
 experiments/
+.idea/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
