@@ -1,22 +1,15 @@
-import os
 import torch
-import multiprocessing
 from tqdm import tqdm
+from gensim.corpora import Dictionary
 from torch.utils.data.dataset import Dataset
-from .preprocess import Tokenizer
-from multiprocessing.dummy import Pool as ThreadPool
 
 
 class SkipGramDataset(Dataset):
 
     def __init__(self, args):
         self.args = args
-        self.term_freq_dict = dict()
-        self.files = self._get_files_in_dir(args.dataset_dir)
-        self.tokenizer = Tokenizer(args)
-        self.removed_infrequent_tokens = False
+        self.dictionary = None
         self.examples = []
-        self.n_examples = 0
         self.name = ''
 
     def __getitem__(self, index):
@@ -25,145 +18,76 @@ class SkipGramDataset(Dataset):
     def __len__(self):
         return len(self.examples)
 
-    def read_file(self, f):
-        """
-        Read File
+    def save(self, examples_path, dict_path):
+        print('Saving Dataset Examples...')
+        torch.save({
+             'examples': self.examples,
+        }, examples_path)
+        print('Saving Dataset Dictionary...')
+        self.dictionary.save(dict_path)
+        print('Saved Dataset!')
 
-        Reads file and returns string. This is to allow different file formats
-        to be used.
-        :param f: File to be read
-        :returns: String
+    def load(self, examples_path, dict_path):
+        print('Loading Dataset Examples...')
+        self.examples = torch.load(examples_path)
+        print('Loading Dataset Dictionary...')
+        self.dictionary = Dictionary().load(dict_path)
+        print('Loaded Saved Dataset!')
+
+    def generate_examples_serial(self):
+        """
+        Generates examples with no multiprocessing - straight through!
+        :return: None - updates class properties
+        """
+        # Now we have a Gensim Dictionary to work with
+        self._build_dictionary()
+        # Remove any tokens with a frequency less than 10
+        self.dictionary.filter_extremes(no_below=10, no_above=0.75)
+
+        self.examples = []
+        for file in tqdm(self.load_files(), desc="Generating Examples (serial)"):
+            file = self.dictionary.doc2idx(file)
+            self.examples.extend(self._generate_examples_from_file(file))
+
+    def load_files(self):
+        """
+        Sets self.files as a list of tokenized documents!
+        :returns: List of files
         """
         # Needs to be implemented by child class
         raise NotImplementedError
 
-    def generate_examples_from_file(self, file, tf_dict):
+    def _build_dictionary(self):
         """
-        Generate all examples from a file
+        Creates a Gensim Dictionary
+        :return: None - modifies self.dictionary
+        """
+        print("Building Dictionary...")
+        self.dictionary = Dictionary(self.load_files())
+
+    def _generate_examples_from_file(self, file):
+        """
+        Generate all examples from a file within window size
         :param file: File from self.files
-        :param tf_dict: Term frequency dict
         :returns: List of examples
         """
 
-        doc_str = self.read_file(file)
-        try:
-            tokenized_doc = self.tokenizer.tokenize_doc(doc_str)
-        except Exception as e:
-            #print(doc_str)
-            raise Exception(e)
-
         examples = []
-        for i, token in enumerate(tokenized_doc):
-            # Ensure token is recorded
-            self._add_token_to_vocab(token, tf_dict)
-            # Generate context words for token in this doc
-            context_words = self._generate_contexts(i, tokenized_doc)
+        for i, token in enumerate(file):
+            if token == -1:
+                # Out of dictionary token
+                continue
+
+            # Generate context tokens for the current token
+            context_words = self._generate_contexts(i, file)
 
             # Form Examples:
-            # An example consists of:
-            #   center word: token
-            #   context word: tokenized_doc[context_word_pos]
-            # In the form of:
             # center, context - follows form: (input, target)
-            new_examples = [(token, ctxt) for ctxt in context_words]
+            new_examples = [(token, ctxt) for ctxt in context_words if ctxt != -1]
 
             # Add to class
             examples.extend(new_examples)
         return examples
-
-    def generate_examples_multi(self):
-        pool = ThreadPool(multiprocessing.cpu_count())
-        batch_size = self.args.file_batch_size
-        file_batches = self._batch_files(batch_size)
-
-        print('\nGenerating Examples for Dataset (multi-threaded)...')
-        for results in tqdm(
-                pool.imap_unordered(
-                    self._generate_examples_worker,
-                    file_batches),
-                total=len(self.files) // batch_size + 1):
-            # Reduce results into final locations
-            examples, tf_dict = results
-            self.examples.extend(examples)
-            self._reduce_tf_dict(tf_dict)
-
-        pool.close()
-        pool.join()
-
-        # Remove any tokens with a frequency of less than 10
-        # Remove examples too by regenerating
-        if not self.removed_infrequent_tokens:
-            tokens_to_remove = set([k for k in self.term_freq_dict if self.term_freq_dict[k] < 10])
-            self.tokenizer = Tokenizer(self.args, custom_stop=tokens_to_remove)
-            self.removed_infrequent_tokens = True
-
-            # Reset and regenerate examples!
-            self.examples = []
-            self.term_freq_dict = dict()
-            self.generate_examples_multi()
-
-    def _generate_examples_worker(self, file_batch):
-        """
-        Generate examples worker
-        Worker to generate examples in a map reduce paradigm
-
-        :param file_batch: List of files - a subset of self.files
-        :returns: list of examples and a term frequency dict for its batch
-        """
-        tf_dict = dict()
-        examples = []
-
-        for f in file_batch:
-            examples.extend(self.generate_examples_from_file(f, tf_dict))
-        return examples, tf_dict
-
-    def _batch_files(self, batch_size):
-        """
-        Batch Files
-        Seperates self.files into smaller batches of files of
-        size batch_size
-
-        :param batch_size: Int - size of each batch
-        :returns: Generator of batches
-        """
-        n_files = len(self.files)
-        for b_idx in range(0, n_files, batch_size):
-            # min() so we don't index outside of self.files
-            yield self.files[b_idx:min(b_idx + batch_size, n_files)]
-
-    def _add_token_to_vocab(self, token, tf_dict):
-        """
-        Add token to the token frequency dict
-        Adds new tokens to the tf_dict  and keeps track of
-        frequency of tokens
-
-        :param token: String
-        :param tf_dict: A {"token": frequency,} dict
-        :returns: None
-        """
-
-        if token not in tf_dict.keys():
-            tf_dict[token] = 1
-        else:
-            # Token in vocab - increase frequency for token
-            tf_dict[token] += 1
-
-    def _reduce_tf_dict(self, tf_dict):
-        """
-        Reduce a term frequency dictionary
-        Updates self.term_freq_dict with values in tf_dict argument.
-        Adds new keys if needed or just sums frequencies
-
-        :param tf_dict: A term frequency dictionary
-        :returns: None - updates self.term_freq_dict
-        """
-        for key in tf_dict:
-            if key in self.term_freq_dict.keys():
-                # Add frequencies
-                self.term_freq_dict[key] += tf_dict[key]
-            else:
-                # Merge
-                self.term_freq_dict[key] = tf_dict[key]
 
     def _generate_contexts(self, token_idx, tokenized_doc):
         """
@@ -191,7 +115,7 @@ class SkipGramDataset(Dataset):
             contexts.append(tokenized_doc[context_pos])
         return contexts
 
-    def _example_to_tensor(self, example, target):
+    def _example_to_tensor(self, center, target):
         """
         Takes raw example and turns it into tensor values
 
@@ -199,28 +123,5 @@ class SkipGramDataset(Dataset):
         :params target: String of the target word
         :returns: A tuple of tensors
         """
-        center_idx = list(self.term_freq_dict.keys()).index(example[0])
-        target_idx = list(self.term_freq_dict.keys()).index(target)
-
-        doc_id = torch.tensor([int(example[1])])
-        center, target = torch.tensor([int(center_idx)]), torch.tensor([int(target_idx)])
-        return ((center, doc_id), target)
-
-    @staticmethod
-    def _get_files_in_dir(src_dir):
-        if src_dir is None:
-            return []
-
-        files = []
-        src_dir = os.path.expanduser(src_dir)
-        d = os.path.join(src_dir)
-
-        if not os.path.isdir(src_dir):
-            raise Exception('Path given is not a directory.')
-
-        for root, _, fnames in sorted(os.walk(d)):
-            for fname in sorted(fnames):
-                path = os.path.join(root, fname)
-                files.append(path)
-
-        return files
+        center, target = torch.tensor([int(center)]), torch.tensor([int(target)])
+        return center, target

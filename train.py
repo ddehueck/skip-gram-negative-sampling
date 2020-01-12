@@ -16,7 +16,7 @@ def get_args():
     parser.add_argument('--window-size', type=int, default=5, help='Window size\
                         used when generating training examples (default: 5)')
     parser.add_argument('--file-batch-size', type=int, default=250, help='Batch size\
-                        used when mult-threading the generation of training examples\
+                        used when multi-threading the generation of training examples\
                         (default: 250)')
 
     """
@@ -30,12 +30,10 @@ def get_args():
     """
     parser.add_argument('--epochs', type=int, default=15, metavar='N',
                         help='number of epochs to train for - iterations over the dataset (default: 15)')
-    parser.add_argument('--batch-size', type=int, default=4096,
-                        metavar='N', help='number of examples in a training batch (default: 4096)')
+    parser.add_argument('--batch-size', type=int, default=1024,
+                        metavar='N', help='number of examples in a training batch (default: 1024)')
     parser.add_argument('--lr', type=float, default=1e-3, metavar='LR',
                         help='learning rate (default: 1e-3)')
-    parser.add_argument('--momentum', type=float, default=0.9,
-                        metavar='M', help='momentum (default: 0.9)')
     parser.add_argument('--seed', type=int, default=42, metavar='S',
                         help='random seed (default: 42)')
 

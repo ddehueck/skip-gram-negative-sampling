@@ -5,7 +5,8 @@ from torch.utils.data import DataLoader
 from model import SkipGramEmbeddings
 from sgns_loss import SGNSLoss
 from tqdm import tqdm
-from datasets.opinrank import OpinRankDataset
+from datasets.pypi_lang import PyPILangDataset
+from datasets.world_order import WorldOrderDataset
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -15,38 +16,28 @@ class Trainer:
         # Load data
         self.args = args
         self.writer = SummaryWriter(log_dir='./experiments/', flush_secs=3)
-        self.dataset = OpinRankDataset(args)
+        #self.dataset = PyPILangDataset(args, examples_path='data/pypi_examples.pth', dict_path='data/pypi_dictionary.gensim')
+        self.dataset = PyPILangDataset(args)
+        self.vocab_size = len(self.dataset.dictionary)
         print("Finished loading dataset")
 
-        print('Saving Dataset...')
-        torch.save({
-             'examples': self.dataset.examples,
-             'term_freq_dict': self.dataset.term_freq_dict,
-         }, 'dataset.pth')
-        print('Saved Dataset!')
-
         self.dataloader = DataLoader(self.dataset, batch_size=args.batch_size,
-                                     shuffle=True, num_workers=args.num_workers)
+                                     shuffle=True, num_workers=args.workers)
 
-        self.model = SkipGramEmbeddings(len(self.dataset.term_freq_dict), args.embedding_len).to(args.device)
-        self.optim = optim.SGD(self.model.parameters(), lr=args.lr)
-        self.sgns = SGNSLoss(self.dataset, self.model.word_embeds, self.args.device)
-
-        # Visualize RANDOM  embeddings
-        print('Adding random embeddings')
-        self.writer.add_embedding(
-            self.model.word_embeds,
-            global_step=-1,
-            tag=f'random_embeds',
-        )
-        print('Finished adding random embeddings!')
+        self.model = SkipGramEmbeddings(self.vocab_size, args.embedding_len).to(args.device)
+        self.optim = optim.SparseAdam(self.model.parameters(), lr=args.lr)
+        self.sgns = SGNSLoss(self.dataset, self.model.word_embeds, self.model.context_embeds, self.args.device)
 
         # Add graph to tensorboard
-        # TODO: Get working on multi-gpu stuff
-        self.writer.add_graph(self.model, iter(self.dataloader).next()[0])
+        #self.writer.add_graph(self.model, iter(self.dataloader).next()[0])
 
     def train(self):
         print('Training on device: {}'.format(self.args.device))
+
+        # Log embeddings!
+        print('\nRandom embeddings:')
+        for word in self.dataset.queries:
+            print(f'word: {word} neighbors: {self.model.nearest_neighbors(word, self.dataset.dictionary)}')
 
         for epoch in range(self.args.epochs):
 
@@ -66,31 +57,30 @@ class Trainer:
                 # Get context vector: word + doc
                 center_embed, context_embed = self.model(center, context)
 
-                # Calc loss: SGNS + Dirichlet
+                # Calc loss: SGNS
                 loss = self.sgns(center_embed, context_embed)
 
                 # Backprop and update
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip)
                 self.optim.step()
 
                 # Keep track of loss
                 running_loss += loss.item()
                 global_step += 1
-                num_examples += len(data)  # Last batch size may not equal args.batch_size
+                num_examples += len(data)  # Last batch's size may not equal args.batch_size
 
                 # Log at step
-                if global_step % self.args.log_step == 0:
-                    norm = (i + 1) * num_examples
-                    self.log_step(epoch, global_step, running_loss/norm, center, context)
+                #if global_step % self.args.log_step == 0:
+                #    norm = (i + 1) * num_examples
+                #    self.log_step(epoch, global_step, running_loss/norm, center, context)
 
             norm = (i + 1) * num_examples
             self.log_and_save_epoch(epoch, running_loss / norm)
+            self.log_step(epoch, global_step, running_loss / norm, center, context)
 
         self.writer.close()
 
     def log_and_save_epoch(self, epoch, loss):
-
         # Visualize document embeddings
         self.writer.add_embedding(
             self.model.word_embeds.weight,
@@ -111,10 +101,11 @@ class Trainer:
     def log_step(self, epoch, global_step, loss, center, target):
         print(f'#############################################')
         print(f'EPOCH: {epoch} | STEP: {global_step} | LOSS {loss}')
-        print(f'#############################################\n\n')
+        print(f'#############################################')
 
         self.writer.add_scalar('train_loss', loss, global_step)
-        # Log gradients - index select to only view gradients of embeddings in batch
-        print(f'WORD EMBEDDING GRADIENTS:\n\
-            {torch.index_select(self.model.word_embeds.weight.grad, 0, center.squeeze())}')
-        print(f'\n{torch.index_select(self.model.word_embeds.weight.grad, 0, target.squeeze())}')
+
+        # Log embeddings!
+        print('\nLearned embeddings:')
+        for word in self.dataset.queries:
+            print(f'word: {word} neighbors: {self.model.nearest_neighbors(word, self.dataset.dictionary)}')
