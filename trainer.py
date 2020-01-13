@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -16,8 +17,8 @@ class Trainer:
         # Load data
         self.args = args
         self.writer = SummaryWriter(log_dir='./experiments/', flush_secs=3)
-        #self.dataset = PyPILangDataset(args, examples_path='data/pypi_examples.pth', dict_path='data/pypi_dictionary.gensim')
-        self.dataset = PyPILangDataset(args)
+        #self.dataset = PyPILangDataset(args, examples_path='data/pypi_examples.pth', dict_path='data/pypi_dict.pth')
+        self.dataset = WorldOrderDataset(args)
         self.vocab_size = len(self.dataset.dictionary)
         print("Finished loading dataset")
 
@@ -25,8 +26,8 @@ class Trainer:
                                      shuffle=True, num_workers=args.workers)
 
         self.model = SkipGramEmbeddings(self.vocab_size, args.embedding_len).to(args.device)
-        self.optim = optim.SparseAdam(self.model.parameters(), lr=args.lr)
-        self.sgns = SGNSLoss(self.dataset, self.model.word_embeds, self.model.context_embeds, self.args.device)
+        self.optim = optim.Adam(self.model.parameters(), lr=args.lr)
+        self.sgns = SGNSLoss(self.dataset, self.model.word_embeds, self.args.device)
 
         # Add graph to tensorboard
         #self.writer.add_graph(self.model, iter(self.dataloader).next()[0])
@@ -42,7 +43,7 @@ class Trainer:
         for epoch in range(self.args.epochs):
 
             print(f'Beginning epoch: {epoch + 1}/{self.args.epochs}')
-            running_loss = 0.0
+            running_loss = 0.0 #testing_loss = 0.0, 0.0
             global_step = epoch * len(self.dataloader)
             num_examples = 0
 
@@ -53,13 +54,10 @@ class Trainer:
 
                 # Remove accumulated gradients
                 self.optim.zero_grad()
-
-                # Get context vector: word + doc
+                # Get context vectors
                 center_embed, context_embed = self.model(center, context)
-
                 # Calc loss: SGNS
                 loss = self.sgns(center_embed, context_embed)
-
                 # Backprop and update
                 loss.backward()
                 self.optim.step()
@@ -69,14 +67,19 @@ class Trainer:
                 global_step += 1
                 num_examples += len(data)  # Last batch's size may not equal args.batch_size
 
+                # TESTING LOSS
+                #testing_loss += test_loss
+
                 # Log at step
                 #if global_step % self.args.log_step == 0:
                 #    norm = (i + 1) * num_examples
                 #    self.log_step(epoch, global_step, running_loss/norm, center, context)
 
             norm = (i + 1) * num_examples
-            self.log_and_save_epoch(epoch, running_loss / norm)
-            self.log_step(epoch, global_step, running_loss / norm, center, context)
+            #self.log_and_save_epoch(epoch, running_loss / norm)
+            self.log_step(epoch, global_step, running_loss / norm)#, testing_loss / norm)
+
+            print('\nGRAD:', np.sum(self.model.word_embeds.weight.grad.clone().detach().numpy()))
 
         self.writer.close()
 
@@ -98,12 +101,12 @@ class Trainer:
         }, f'epoch_{epoch}_ckpt.pth')
         print(f'Finished saving checkpoint')
 
-    def log_step(self, epoch, global_step, loss, center, target):
+    def log_step(self, epoch, global_step, loss):
         print(f'#############################################')
-        print(f'EPOCH: {epoch} | STEP: {global_step} | LOSS {loss}')
+        print(f'EPOCH: {epoch} | STEP: {global_step} | LOSS {loss}')# | TEST LOSS {test_loss}')
         print(f'#############################################')
 
-        self.writer.add_scalar('train_loss', loss, global_step)
+        #self.writer.add_scalar('train_loss', loss, global_step)
 
         # Log embeddings!
         print('\nLearned embeddings:')

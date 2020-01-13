@@ -18,7 +18,7 @@ class PyPILangDataset(SkipGramDataset):
             self.files = self.tokenize_files()
             self.generate_examples_serial()
 
-        self.save('pypi_examples.pth', 'pypi_dict.pth')
+            self.save('pypi_examples.pth', 'pypi_dict.pth')
 
         print(f'There are {len(self.dictionary)} tokens and {len(self.examples)} examples.')
 

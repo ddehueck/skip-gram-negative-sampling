@@ -29,7 +29,7 @@ class SkipGramDataset(Dataset):
 
     def load(self, examples_path, dict_path):
         print('Loading Dataset Examples...')
-        self.examples = torch.load(examples_path)
+        self.examples = torch.load(examples_path)['examples']
         print('Loading Dataset Dictionary...')
         self.dictionary = Dictionary().load(dict_path)
         print('Loaded Saved Dataset!')

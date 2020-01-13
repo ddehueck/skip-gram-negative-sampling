@@ -6,8 +6,8 @@ class SkipGramEmbeddings(nn.Module):
 
     def __init__(self, vocab_size, embed_len):
         super(SkipGramEmbeddings, self).__init__()
-        self.word_embeds = nn.Embedding(vocab_size, embed_len, sparse=True)
-        self.context_embeds = nn.Embedding(vocab_size, embed_len, sparse=True)
+        self.word_embeds = nn.Embedding(vocab_size, embed_len)#, sparse=True)
+        #self.context_embeds = nn.Embedding(vocab_size, embed_len)# sparse=True)
 
     def forward(self, center, context):
         """
@@ -17,7 +17,7 @@ class SkipGramEmbeddings(nn.Module):
         :param context: The context word index
         :return: The embedding of the target word
         """
-        return self.word_embeds(center), self.context_embeds(context)
+        return self.word_embeds(center), self.word_embeds(context)
 
     def nearest_neighbors(self, word, dictionary):
         """
